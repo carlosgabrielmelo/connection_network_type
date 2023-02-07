@@ -31,8 +31,8 @@ For a contribution to be accepted:
 - Examples should always be updated or added.*
 - Tests should always be updated or added.*
 - Format the Dart code accordingly with `flutter format`.
-- Your code should pass the analyzer checks `flutter run analyze`.
-- Your code should pass all tests `flutter run test`.
+- Your code should pass the analyzer checks `flutter analyze`.
+- Your code should pass all tests `flutter test`.
 - Start your PR title with a [conventional commit] type
 
 If the contribution doesn't meet these criteria, a maintainer will discuss it with you on the issue

@@ -1,3 +1,4 @@
-## 0.0.1
+# 0.0.1
 
-* First release
+* Added `currentNetworkStatus()` to get the current Network Status
+* Added Stream `onNetworkStateChanged` to listen Network changes

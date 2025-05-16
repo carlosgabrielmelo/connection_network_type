@@ -1,4 +1,4 @@
-# 0.0.1
+# 1.0.0
 
 * Added compatibility with Gradle 8 Android
 

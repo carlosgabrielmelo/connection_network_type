@@ -1,6 +1,6 @@
 # 0.0.1
 
-* Added compability with Gradle 8 Android
+* Added compatibility with Gradle 8 Android
 
 # 0.0.1
 

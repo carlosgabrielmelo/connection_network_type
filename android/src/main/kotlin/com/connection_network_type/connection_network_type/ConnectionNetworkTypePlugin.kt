@@ -10,6 +10,7 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Build
 import android.telephony.TelephonyManager
+import android.telephony.TelephonyDisplayInfo
 import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
@@ -151,12 +152,21 @@ private  fun getMobileNetworkType(context: Context, connectivityManager: Connect
           TelephonyManager.NETWORK_TYPE_HSPA,
           TelephonyManager.NETWORK_TYPE_EVDO_B,
           TelephonyManager.NETWORK_TYPE_EHRPD,
+          TelephonyManager.NETWORK_TYPE_TD_SCDMA,
           TelephonyManager.NETWORK_TYPE_HSPAP
   )
   if (networkInfo.subtype in mobile3G_types) {
     return NetworkState.mobile3G.toString()
   }
   if (networkInfo.subtype == TelephonyManager.NETWORK_TYPE_LTE) {
+    // Check if this is 5G NSA by examining telephonyDisplayInfo.overrideNetworkType
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+      val telephonyManager = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+      val displayInfo = telephonyManager.telephonyDisplayInfo
+      if (displayInfo != null && displayInfo.overrideNetworkType == TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_NSA) {
+        return NetworkState.mobile5G.toString()
+      }
+    }
     return NetworkState.mobile4G.toString()
   }
   if (networkInfo.subtype == TelephonyManager.NETWORK_TYPE_NR) {

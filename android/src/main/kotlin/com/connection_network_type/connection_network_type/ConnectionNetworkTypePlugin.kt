@@ -163,8 +163,18 @@ private  fun getMobileNetworkType(context: Context, connectivityManager: Connect
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
       val telephonyManager = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
       val displayInfo = telephonyManager.telephonyDisplayInfo
-      if (displayInfo != null && displayInfo.overrideNetworkType == TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_NSA) {
-        return NetworkState.mobile5G.toString()
+      if (displayInfo != null) {
+        val overrideNetworkType = displayInfo.overrideNetworkType
+        // Check for all 5G NSA override types:
+        // - OVERRIDE_NETWORK_TYPE_NR_NSA: Standard 5G NSA
+        // - OVERRIDE_NETWORK_TYPE_NR_NSA_MMWAVE: 5G NSA on mmWave (deprecated in API 31, but may still appear)
+        // - OVERRIDE_NETWORK_TYPE_NR_ADVANCED: Advanced 5G NSA (API 31+), replaces mmWave
+        if (overrideNetworkType == TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_NSA ||
+            overrideNetworkType == TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_NSA_MMWAVE ||
+            (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+             overrideNetworkType == TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_ADVANCED)) {
+          return NetworkState.mobile5G.toString()
+        }
       }
     }
     return NetworkState.mobile4G.toString()

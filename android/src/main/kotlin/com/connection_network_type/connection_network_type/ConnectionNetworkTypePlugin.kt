@@ -10,7 +10,6 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Build
 import android.telephony.TelephonyManager
-import android.telephony.TelephonyDisplayInfo
 import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
@@ -159,22 +158,22 @@ private  fun getMobileNetworkType(context: Context, connectivityManager: Connect
     return NetworkState.mobile3G.toString()
   }
   if (networkInfo.subtype == TelephonyManager.NETWORK_TYPE_LTE) {
-    // Check if this is 5G NSA by examining telephonyDisplayInfo.overrideNetworkType
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-      val telephonyManager = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
-      val displayInfo = telephonyManager.telephonyDisplayInfo
-      if (displayInfo != null) {
-        val overrideNetworkType = displayInfo.overrideNetworkType
-        // Check for all 5G NSA override types:
-        // - OVERRIDE_NETWORK_TYPE_NR_NSA: Standard 5G NSA
-        // - OVERRIDE_NETWORK_TYPE_NR_NSA_MMWAVE: 5G NSA on mmWave (deprecated in API 31, but may still appear)
-        // - OVERRIDE_NETWORK_TYPE_NR_ADVANCED: Advanced 5G NSA (API 31+), replaces mmWave
-        if (overrideNetworkType == TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_NSA ||
-            overrideNetworkType == TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_NSA_MMWAVE ||
-            (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-             overrideNetworkType == TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_ADVANCED)) {
+    // Check for 5G using NetworkCapabilities when available (API 29+)
+    // This can detect 5G NSA when the network type is LTE
+    // Reference: https://developer.android.com/reference/android/net/NetworkCapabilities#NET_CAPABILITY_NR
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      try {
+        val network = connectivityManager.activeNetwork
+        val capabilities = connectivityManager.getNetworkCapabilities(network)
+        if (capabilities != null && 
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NR)) {
           return NetworkState.mobile5G.toString()
         }
+      } catch (t: Throwable) {
+        // Defensive: some devices/OS versions may throw when calling newer network APIs
+        // Fall back to 4G if we can't determine 5G capability
+        Log.w("ConnectionNetworkType", "Unable to check 5G capability via NetworkCapabilities, falling back to 4G", t)
+        return NetworkState.unReachable.toString()
       }
     }
     return NetworkState.mobile4G.toString()

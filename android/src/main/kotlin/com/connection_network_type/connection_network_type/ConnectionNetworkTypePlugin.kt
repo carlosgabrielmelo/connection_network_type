@@ -151,6 +151,7 @@ private  fun getMobileNetworkType(context: Context, connectivityManager: Connect
           TelephonyManager.NETWORK_TYPE_HSPA,
           TelephonyManager.NETWORK_TYPE_EVDO_B,
           TelephonyManager.NETWORK_TYPE_EHRPD,
+          TelephonyManager.NETWORK_TYPE_TD_SCDMA,
           TelephonyManager.NETWORK_TYPE_HSPAP
   )
   if (networkInfo.subtype in mobile3G_types) {

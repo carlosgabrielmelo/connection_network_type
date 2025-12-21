@@ -173,7 +173,6 @@ private  fun getMobileNetworkType(context: Context, connectivityManager: Connect
         // Defensive: some devices/OS versions may throw when calling newer network APIs
         // Fall back to 4G if we can't determine 5G capability
         Log.w("ConnectionNetworkType", "Unable to check 5G capability via NetworkCapabilities, falling back to 4G", t)
-        return NetworkState.unReachable.toString()
       }
     }
     return NetworkState.mobile4G.toString()

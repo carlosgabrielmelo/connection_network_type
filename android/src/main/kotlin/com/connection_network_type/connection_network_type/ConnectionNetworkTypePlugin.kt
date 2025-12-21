@@ -10,6 +10,7 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Build
 import android.telephony.TelephonyManager
+import android.telephony.TelephonyDisplayInfo
 import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
@@ -158,6 +159,32 @@ private  fun getMobileNetworkType(context: Context, connectivityManager: Connect
     return NetworkState.mobile3G.toString()
   }
   if (networkInfo.subtype == TelephonyManager.NETWORK_TYPE_LTE) {
+    // Check if this is 5G NSA (5G NSA uses 4G infrastructure, so it appears as LTE)
+    // Use TelephonyDisplayInfo to detect 5G NSA (API 30+)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+      try {
+        val telephonyManager = ContextCompat.getSystemService(context, TelephonyManager::class.java)
+        if (telephonyManager != null) {
+          // Use reflection to access telephonyDisplayInfo (not publicly documented)
+          val displayInfoField = telephonyManager.javaClass.getDeclaredField("telephonyDisplayInfo")
+          displayInfoField.isAccessible = true
+          val displayInfo = displayInfoField.get(telephonyManager) as? TelephonyDisplayInfo
+          
+          if (displayInfo != null) {
+            val overrideNetworkType = displayInfo.overrideNetworkType
+            if (overrideNetworkType == TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_NSA ||
+                overrideNetworkType == TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_NSA_MMWAVE ||
+                (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                 overrideNetworkType == TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_ADVANCED)) {
+              return NetworkState.mobile5G.toString()
+            }
+          }
+        }
+      } catch (t: Throwable) {
+        // Reflection may fail on some devices, fall back to 4G
+        Log.w("ConnectionNetworkType", "Unable to check 5G NSA, falling back to 4G", t)
+      }
+    }
     return NetworkState.mobile4G.toString()
   }
   if (networkInfo.subtype == TelephonyManager.NETWORK_TYPE_NR) {

@@ -45,6 +45,24 @@ The main difference is that the code has been refactored to remove the need to m
     });
 ```
 
+## 5G NSA Detection on Android
+
+On Android, `NetworkStatus.mobile5G` covers both 5G Standalone (SA) and 5G Non-Standalone (NSA). 5G NSA reuses the LTE infrastructure as an anchor, so the radio subtype keeps reporting `NETWORK_TYPE_LTE` even when a 5G NR bearer is active. To distinguish a real LTE connection from a 5G NSA carrier, the plugin observes `TelephonyDisplayInfo.overrideNetworkType` through a `PhoneStateListener` callback.
+
+### Limitations
+
+The Android APIs used for NSA detection impose three constraints. The first two are platform-imposed and cannot be removed by the plugin. The third could be removed only by changing the plugin's public contract.
+
+1. Android 11 (API 30) or higher. `TelephonyDisplayInfo` was introduced in Android 11. On older devices, an LTE radio carrying a 5G NSA bearer is reported as `mobile4G`, just as it was before this feature was added. There is no public API on earlier Android versions that exposes the override network type.
+
+2. `READ_PHONE_STATE` must be granted at runtime. The listener used to read `TelephonyDisplayInfo` requires the runtime `READ_PHONE_STATE` permission. If the permission is denied, the plugin falls back to LTE → `mobile4G`. The permission is re-checked on every query, so granting it after plugin initialization is fully supported.
+
+3. First query immediately after permission grant. `TelephonyDisplayInfo` has no synchronous getter — it is delivered asynchronously through `PhoneStateListener.onDisplayInfoChanged`. There is a short window (typically a few milliseconds) between registering the listener and receiving the first event, during which the override network type is not yet known. A query made inside this window on a 5G NSA connection returns `mobile4G`. Subsequent queries, and any event delivered through `onNetworkStateChanged`, return the correct value.
+
+### Why limitation 3 is not fixed
+
+Removing it would require either suspending `currentNetworkStatus()` until the first callback arrives — turning a fast lookup into an unbounded async wait — or introducing a new initialization step that consumers would have to call explicitly. Both options break the existing Dart API contract and were intentionally avoided to preserve backward compatibility for current users of the plugin.
+
 ## Getting Started
 
 This project is a starting point for a Flutter

@@ -54,12 +54,13 @@ class ConnectionNetworkTypePlugin: FlutterPlugin, MethodCallHandler, EventChanne
     context = flutterPluginBinding.applicationContext
     connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
 
-    registerDisplayInfoListenerIfSupported()
+    ensureDisplayInfoListenerRegistered()
   }
 
   @RequiresApi(Build.VERSION_CODES.N)
   override fun onMethodCall(@NonNull call: MethodCall, @NonNull result: Result) {
     if (call.method == "networkStatus") {
+      ensureDisplayInfoListenerRegistered()
       result.success(getNetworkState(connectivityManager, context, cachedOverrideNetworkType))
     } else {
       result.notImplemented()
@@ -74,7 +75,10 @@ class ConnectionNetworkTypePlugin: FlutterPlugin, MethodCallHandler, EventChanne
   override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
     // Sign up for notifications
     if (broadcastReceiver == null) {
-      broadcastReceiver = NetworkBroadcastReceiver(events, connectivityManager, context) { cachedOverrideNetworkType }
+      broadcastReceiver = NetworkBroadcastReceiver(events, connectivityManager, context) {
+        ensureDisplayInfoListenerRegistered()
+        cachedOverrideNetworkType
+      }
     }
     val filter = IntentFilter()
     filter.addAction(ConnectivityManager.CONNECTIVITY_ACTION)
@@ -88,6 +92,13 @@ class ConnectionNetworkTypePlugin: FlutterPlugin, MethodCallHandler, EventChanne
       context.unregisterReceiver(broadcastReceiver);
       broadcastReceiver = null;
     }
+  }
+
+  // Idempotent: re-checked on every query so the listener is registered as soon as
+  // READ_PHONE_STATE is granted at runtime, not only at engine attach time.
+  private fun ensureDisplayInfoListenerRegistered() {
+    if (displayInfoListener != null) return
+    registerDisplayInfoListenerIfSupported()
   }
 
   // 5G NSA detection requires TelephonyDisplayInfo, which only exists on API 30+ (Android 11).
@@ -227,15 +238,18 @@ private fun getMobileNetworkType(
   return NetworkState.mobileOther.toString()
 }
 
+// Constants from android.telephony.TelephonyDisplayInfo, inlined so isNrOverride
+// stays callable on API < 30 without referencing the class.
+private const val OVERRIDE_NETWORK_TYPE_NR_NSA = 3        // API 30
+private const val OVERRIDE_NETWORK_TYPE_NR_NSA_MMWAVE = 4 // API 30, deprecated 31
+private const val OVERRIDE_NETWORK_TYPE_NR_ADVANCED = 5   // API 31
+
 // True when the LTE radio is anchoring a 5G NSA carrier (or NR Advanced).
-// Constants are inlined so this stays callable on API < 30 without referencing
-// TelephonyDisplayInfo. Values come from android.telephony.TelephonyDisplayInfo:
-//   OVERRIDE_NETWORK_TYPE_NR_NSA        = 3 (API 30)
-//   OVERRIDE_NETWORK_TYPE_NR_NSA_MMWAVE = 4 (API 30, deprecated 31)
-//   OVERRIDE_NETWORK_TYPE_NR_ADVANCED   = 5 (API 31)
 private fun isNrOverride(overrideNetworkType: Int?): Boolean {
   if (overrideNetworkType == null) return false
-  return overrideNetworkType == 3 || overrideNetworkType == 4 || overrideNetworkType == 5
+  return overrideNetworkType == OVERRIDE_NETWORK_TYPE_NR_NSA ||
+    overrideNetworkType == OVERRIDE_NETWORK_TYPE_NR_NSA_MMWAVE ||
+    overrideNetworkType == OVERRIDE_NETWORK_TYPE_NR_ADVANCED
 }
 
 private enum class NetworkState {

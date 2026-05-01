@@ -1,6 +1,7 @@
 package com.connection_network_type.connection_network_type
 
 import androidx.annotation.NonNull
+import android.Manifest
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -9,6 +10,8 @@ import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Build
+import android.telephony.PhoneStateListener
+import android.telephony.TelephonyDisplayInfo
 import android.telephony.TelephonyManager
 import android.util.Log
 import androidx.annotation.RequiresApi
@@ -33,6 +36,12 @@ class ConnectionNetworkTypePlugin: FlutterPlugin, MethodCallHandler, EventChanne
   private lateinit var connectivityManager: ConnectivityManager
   private var broadcastReceiver: NetworkBroadcastReceiver? = null
 
+  private var telephonyManager: TelephonyManager? = null
+  private var displayInfoListener: PhoneStateListener? = null
+  // Last overrideNetworkType reported by TelephonyDisplayInfo. Stays null on API < 30
+  // or when READ_PHONE_STATE has not been granted at runtime.
+  @Volatile private var cachedOverrideNetworkType: Int? = null
+
 
   override fun onAttachedToEngine(@NonNull flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
     channel = MethodChannel(flutterPluginBinding.binaryMessenger, "connection_network_type")
@@ -45,12 +54,13 @@ class ConnectionNetworkTypePlugin: FlutterPlugin, MethodCallHandler, EventChanne
     context = flutterPluginBinding.applicationContext
     connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
 
+    registerDisplayInfoListenerIfSupported()
   }
 
   @RequiresApi(Build.VERSION_CODES.N)
   override fun onMethodCall(@NonNull call: MethodCall, @NonNull result: Result) {
     if (call.method == "networkStatus") {
-      result.success(getNetworkState(connectivityManager,context))
+      result.success(getNetworkState(connectivityManager, context, cachedOverrideNetworkType))
     } else {
       result.notImplemented()
     }
@@ -58,12 +68,13 @@ class ConnectionNetworkTypePlugin: FlutterPlugin, MethodCallHandler, EventChanne
 
   override fun onDetachedFromEngine(@NonNull binding: FlutterPlugin.FlutterPluginBinding) {
     channel.setMethodCallHandler(null)
+    unregisterDisplayInfoListener()
   }
 
   override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
     // Sign up for notifications
     if (broadcastReceiver == null) {
-      broadcastReceiver = NetworkBroadcastReceiver(events,connectivityManager,context)
+      broadcastReceiver = NetworkBroadcastReceiver(events, connectivityManager, context) { cachedOverrideNetworkType }
     }
     val filter = IntentFilter()
     filter.addAction(ConnectivityManager.CONNECTIVITY_ACTION)
@@ -78,18 +89,61 @@ class ConnectionNetworkTypePlugin: FlutterPlugin, MethodCallHandler, EventChanne
       broadcastReceiver = null;
     }
   }
+
+  // 5G NSA detection requires TelephonyDisplayInfo, which only exists on API 30+ (Android 11).
+  // On older devices the listener is never registered and LTE keeps mapping to mobile4G.
+  private fun registerDisplayInfoListenerIfSupported() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+    if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE)
+        != PackageManager.PERMISSION_GRANTED) return
+    registerDisplayInfoListenerR()
+  }
+
+  @RequiresApi(Build.VERSION_CODES.R)
+  private fun registerDisplayInfoListenerR() {
+    val tm = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager ?: return
+    val listener = object : PhoneStateListener() {
+      override fun onDisplayInfoChanged(telephonyDisplayInfo: TelephonyDisplayInfo) {
+        cachedOverrideNetworkType = telephonyDisplayInfo.overrideNetworkType
+      }
+    }
+    try {
+      tm.listen(listener, PhoneStateListener.LISTEN_DISPLAY_INFO_CHANGED)
+      telephonyManager = tm
+      displayInfoListener = listener
+    } catch (e: SecurityException) {
+      Log.w("ConnectionNetworkType", "Could not register display info listener: ${e.message}")
+    }
+  }
+
+  private fun unregisterDisplayInfoListener() {
+    val listener = displayInfoListener ?: return
+    telephonyManager?.listen(listener, PhoneStateListener.LISTEN_NONE)
+    displayInfoListener = null
+    telephonyManager = null
+    cachedOverrideNetworkType = null
+  }
 }
 
-private  class NetworkBroadcastReceiver(val events: EventChannel.EventSink?,val connectivityManager: ConnectivityManager,val context: Context): BroadcastReceiver() {
+private class NetworkBroadcastReceiver(
+  val events: EventChannel.EventSink?,
+  val connectivityManager: ConnectivityManager,
+  val context: Context,
+  val overrideNetworkTypeProvider: () -> Int?
+) : BroadcastReceiver() {
   @RequiresApi(Build.VERSION_CODES.N)
   override fun onReceive(p0: Context?, p1: Intent?) {
-    events?.success(getNetworkState(connectivityManager,context));
+    events?.success(getNetworkState(connectivityManager, context, overrideNetworkTypeProvider()))
   }
 }
 
 // Get network status
 @RequiresApi(Build.VERSION_CODES.N)
-private  fun getNetworkState(connectivityManager: ConnectivityManager, context: Context): String {
+private fun getNetworkState(
+  connectivityManager: ConnectivityManager,
+  context: Context,
+  overrideNetworkType: Int?
+): String {
   if (android.os.Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
     val network = connectivityManager.activeNetwork
     val capabilities = connectivityManager.getNetworkCapabilities(network)
@@ -101,7 +155,7 @@ private  fun getNetworkState(connectivityManager: ConnectivityManager, context: 
     }
 
     if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) {
-      return getMobileNetworkType(context, connectivityManager)
+      return getMobileNetworkType(context, connectivityManager, overrideNetworkType)
     }
   }else{
     val networkInfo = connectivityManager.activeNetworkInfo
@@ -114,7 +168,7 @@ private  fun getNetworkState(connectivityManager: ConnectivityManager, context: 
         return NetworkState.wifi.toString()
       }
       ConnectivityManager.TYPE_MOBILE,ConnectivityManager.TYPE_MOBILE_DUN,ConnectivityManager.TYPE_MOBILE_HIPRI -> {
-        return getMobileNetworkType(context, connectivityManager)
+        return getMobileNetworkType(context, connectivityManager, overrideNetworkType)
       }
       else -> return NetworkState.unReachable.toString()
     }
@@ -123,11 +177,15 @@ private  fun getNetworkState(connectivityManager: ConnectivityManager, context: 
 }
 
 @RequiresApi(Build.VERSION_CODES.N)
-private  fun getMobileNetworkType(context: Context, connectivityManager: ConnectivityManager): String {
+private fun getMobileNetworkType(
+  context: Context,
+  connectivityManager: ConnectivityManager,
+  overrideNetworkType: Int?
+): String {
   if (context == null) {
     return NetworkState.mobileOther.toString()
   }
-  
+
   val networkInfo = connectivityManager.activeNetworkInfo
   if (networkInfo == null) {
     return NetworkState.mobileOther.toString()
@@ -158,12 +216,26 @@ private  fun getMobileNetworkType(context: Context, connectivityManager: Connect
     return NetworkState.mobile3G.toString()
   }
   if (networkInfo.subtype == TelephonyManager.NETWORK_TYPE_LTE) {
+    if (isNrOverride(overrideNetworkType)) {
+      return NetworkState.mobile5G.toString()
+    }
     return NetworkState.mobile4G.toString()
   }
   if (networkInfo.subtype == TelephonyManager.NETWORK_TYPE_NR) {
     return NetworkState.mobile5G.toString()
   }
   return NetworkState.mobileOther.toString()
+}
+
+// True when the LTE radio is anchoring a 5G NSA carrier (or NR Advanced).
+// Constants are inlined so this stays callable on API < 30 without referencing
+// TelephonyDisplayInfo. Values come from android.telephony.TelephonyDisplayInfo:
+//   OVERRIDE_NETWORK_TYPE_NR_NSA        = 3 (API 30)
+//   OVERRIDE_NETWORK_TYPE_NR_NSA_MMWAVE = 4 (API 30, deprecated 31)
+//   OVERRIDE_NETWORK_TYPE_NR_ADVANCED   = 5 (API 31)
+private fun isNrOverride(overrideNetworkType: Int?): Boolean {
+  if (overrideNetworkType == null) return false
+  return overrideNetworkType == 3 || overrideNetworkType == 4 || overrideNetworkType == 5
 }
 
 private enum class NetworkState {

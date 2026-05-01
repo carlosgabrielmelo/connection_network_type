@@ -83,3 +83,5 @@ pubspec.lock
 # FVM Version Cache
 .fvm/
 .fvmrc
+/.vscode
+.vscode/settings.json

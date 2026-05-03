@@ -11,6 +11,7 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Build
 import android.telephony.PhoneStateListener
+import android.telephony.TelephonyCallback
 import android.telephony.TelephonyDisplayInfo
 import android.telephony.TelephonyManager
 import android.util.Log
@@ -26,10 +27,12 @@ import io.flutter.plugin.common.MethodChannel.Result
 
 /** ConnectionNetworkTypePlugin */
 class ConnectionNetworkTypePlugin: FlutterPlugin, MethodCallHandler, EventChannel.StreamHandler {
-  /// The MethodChannel that will the communication between Flutter and native Android
-  ///
-  /// This local reference serves to register the plugin with the Flutter Engine and unregister it
-  /// when the Flutter Engine is detached from the Activity
+  /**
+   * The MethodChannel that will the communication between Flutter and native Android
+   *
+   * This local reference serves to register the plugin with the Flutter Engine and unregister it
+   * when the Flutter Engine is detached from the Activity
+   */
   private lateinit var channel : MethodChannel
   private lateinit var eventChannel: EventChannel
   private lateinit var context: Context
@@ -37,7 +40,11 @@ class ConnectionNetworkTypePlugin: FlutterPlugin, MethodCallHandler, EventChanne
   private var broadcastReceiver: NetworkBroadcastReceiver? = null
 
   private var telephonyManager: TelephonyManager? = null
+  // Listener used on API 30 only (PhoneStateListener was deprecated in API 31).
   private var displayInfoListener: PhoneStateListener? = null
+  // Callback used on API 31+. Held as Any? so the TelephonyCallback class is not
+  // referenced from a field on devices below API 31.
+  private var displayInfoCallback: Any? = null
   // Last overrideNetworkType reported by TelephonyDisplayInfo. Stays null on API < 30
   // or when READ_PHONE_STATE has not been granted at runtime.
   @Volatile private var cachedOverrideNetworkType: Int? = null
@@ -97,17 +104,22 @@ class ConnectionNetworkTypePlugin: FlutterPlugin, MethodCallHandler, EventChanne
   // Idempotent: re-checked on every query so the listener is registered as soon as
   // READ_PHONE_STATE is granted at runtime, not only at engine attach time.
   private fun ensureDisplayInfoListenerRegistered() {
-    if (displayInfoListener != null) return
+    if (displayInfoListener != null || displayInfoCallback != null) return
     registerDisplayInfoListenerIfSupported()
   }
 
   // 5G NSA detection requires TelephonyDisplayInfo, which only exists on API 30+ (Android 11).
   // On older devices the listener is never registered and LTE keeps mapping to mobile4G.
+  // API 31+ uses the non-deprecated TelephonyCallback; API 30 uses PhoneStateListener.
   private fun registerDisplayInfoListenerIfSupported() {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
     if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE)
         != PackageManager.PERMISSION_GRANTED) return
-    registerDisplayInfoListenerR()
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      registerDisplayInfoCallbackS()
+    } else {
+      registerDisplayInfoListenerR()
+    }
   }
 
   @RequiresApi(Build.VERSION_CODES.R)
@@ -127,12 +139,43 @@ class ConnectionNetworkTypePlugin: FlutterPlugin, MethodCallHandler, EventChanne
     }
   }
 
+  @RequiresApi(Build.VERSION_CODES.S)
+  private fun registerDisplayInfoCallbackS() {
+    val tm = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager ?: return
+    val callback = object : TelephonyCallback(), TelephonyCallback.DisplayInfoListener {
+      override fun onDisplayInfoChanged(telephonyDisplayInfo: TelephonyDisplayInfo) {
+        cachedOverrideNetworkType = telephonyDisplayInfo.overrideNetworkType
+      }
+    }
+    try {
+      tm.registerTelephonyCallback(context.mainExecutor, callback)
+      telephonyManager = tm
+      displayInfoCallback = callback
+    } catch (e: SecurityException) {
+      Log.w("ConnectionNetworkType", "Could not register telephony display info callback: ${e.message}")
+    }
+  }
+
   private fun unregisterDisplayInfoListener() {
-    val listener = displayInfoListener ?: return
-    telephonyManager?.listen(listener, PhoneStateListener.LISTEN_NONE)
+    val tm = telephonyManager
+    if (tm != null) {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        unregisterDisplayInfoCallbackS(tm)
+      } else if (displayInfoListener != null) {
+        tm.listen(displayInfoListener, PhoneStateListener.LISTEN_NONE)
+      }
+    }
     displayInfoListener = null
+    displayInfoCallback = null
     telephonyManager = null
     cachedOverrideNetworkType = null
+  }
+
+  @RequiresApi(Build.VERSION_CODES.S)
+  private fun unregisterDisplayInfoCallbackS(tm: TelephonyManager) {
+    (displayInfoCallback as? TelephonyCallback)?.let {
+      tm.unregisterTelephonyCallback(it)
+    }
   }
 }
 
@@ -197,6 +240,10 @@ private fun getMobileNetworkType(
     return NetworkState.mobileOther.toString()
   }
 
+  if (isStrict5GSA(context)) {
+    return NetworkState.mobile5G.toString()
+  }
+
   val networkInfo = connectivityManager.activeNetworkInfo
   if (networkInfo == null) {
     return NetworkState.mobileOther.toString()
@@ -250,6 +297,21 @@ private fun isNrOverride(overrideNetworkType: Int?): Boolean {
   return overrideNetworkType == OVERRIDE_NETWORK_TYPE_NR_NSA ||
     overrideNetworkType == OVERRIDE_NETWORK_TYPE_NR_NSA_MMWAVE ||
     overrideNetworkType == OVERRIDE_NETWORK_TYPE_NR_ADVANCED
+}
+
+// Strict 5G SA detection via TelephonyManager.getDataNetworkType(). Preferred over
+// NetworkInfo.subtype on API 29+, where subtype is deprecated and may be capped to
+// UNKNOWN without READ_PHONE_STATE. Returns false on older APIs and falls back silently
+// when the permission has not been granted.
+private fun isStrict5GSA(context: Context): Boolean {
+  if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
+  val tm = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager ?: return false
+  return try {
+    tm.dataNetworkType == TelephonyManager.NETWORK_TYPE_NR
+  } catch (e: SecurityException) {
+    Log.d("ConnectionNetworkType", "READ_PHONE_STATE not granted; cannot read dataNetworkType")
+    false
+  }
 }
 
 private enum class NetworkState {

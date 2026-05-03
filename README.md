@@ -47,7 +47,7 @@ The main difference is that the code has been refactored to remove the need to m
 
 ## 5G NSA Detection on Android
 
-On Android, `NetworkStatus.mobile5G` covers both 5G Standalone (SA) and 5G Non-Standalone (NSA). 5G NSA reuses the LTE infrastructure as an anchor, so the radio subtype keeps reporting `NETWORK_TYPE_LTE` even when a 5G NR bearer is active. To distinguish a real LTE connection from a 5G NSA carrier, the plugin observes `TelephonyDisplayInfo.overrideNetworkType` through a `PhoneStateListener` callback.
+On Android, `NetworkStatus.mobile5G` covers both 5G Standalone (SA) and 5G Non-Standalone (NSA). 5G SA is detected via `TelephonyManager.getDataNetworkType()` on Android 10+ (API 29), with a fallback to `NetworkInfo.subtype` on older devices. 5G NSA reuses the LTE infrastructure as an anchor, so the radio subtype keeps reporting `NETWORK_TYPE_LTE` even when a 5G NR bearer is active; to distinguish it from real LTE, the plugin observes `TelephonyDisplayInfo.overrideNetworkType` through `TelephonyCallback.DisplayInfoListener` on Android 12+ (API 31) and `PhoneStateListener.LISTEN_DISPLAY_INFO_CHANGED` on Android 11 (API 30).
 
 ### Limitations
 
@@ -57,7 +57,7 @@ The Android APIs used for NSA detection impose three constraints. The first two 
 
 2. `READ_PHONE_STATE` must be granted at runtime. The listener used to read `TelephonyDisplayInfo` requires the runtime `READ_PHONE_STATE` permission. If the permission is denied, the plugin falls back to LTE → `mobile4G`. The permission is re-checked on every query, so granting it after plugin initialization is fully supported.
 
-3. First query immediately after permission grant. `TelephonyDisplayInfo` has no synchronous getter — it is delivered asynchronously through `PhoneStateListener.onDisplayInfoChanged`. There is a short window (typically a few milliseconds) between registering the listener and receiving the first event, during which the override network type is not yet known. A query made inside this window on a 5G NSA connection returns `mobile4G`. Subsequent queries, and any event delivered through `onNetworkStateChanged`, return the correct value.
+3. First query immediately after permission grant. `TelephonyDisplayInfo` has no synchronous getter — it is delivered asynchronously through the telephony display info callback. There is a short window (typically a few milliseconds) between registering the callback and receiving the first event, during which the override network type is not yet known. A query made inside this window on a 5G NSA connection returns `mobile4G`. Subsequent queries, and any event delivered through `onNetworkStateChanged`, return the correct value.
 
 ### Why limitation 3 is not fixed
 
